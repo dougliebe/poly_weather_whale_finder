@@ -1,107 +1,104 @@
 """Fetch and filter Polymarket weather markets via the Gamma API."""
 
-import requests
+import json
 import time
+import requests
 from typing import Optional
 
 GAMMA_BASE = "https://gamma-api.polymarket.com"
 
-WEATHER_KEYWORDS = [
-    "temperature", "degrees", "fahrenheit", "celsius",
-    "weather", "high temp", "low temp",
-]
+
+WEATHER_TITLE_KEYWORDS = ["temperature", "°c", "°f", "fahrenheit", "celsius"]
 
 
-def get_weather_markets(
-    limit: int = 100,
-    offset: int = 0,
-    active_only: bool = False,
-) -> list[dict]:
+def _is_weather_event(event: dict) -> bool:
+    title = (event.get("title") or event.get("slug") or "").lower()
+    return any(kw in title for kw in WEATHER_TITLE_KEYWORDS)
+
+
+def get_weather_events(limit: int = 100) -> list[dict]:
     """
-    Search for weather/temperature markets on Polymarket.
+    Return all weather/temperature events from the Gamma API.
 
-    Returns a list of market dicts. Each dict includes:
-        - id, question, conditionId, slug
-        - tokens: list of {token_id, outcome, price}
-        - active, closed, startDate, endDate
-        - volume, liquidity
+    Uses the /events endpoint which groups related temperature-outcome markets
+    (e.g., all "28°C / 29°C / 30°C…" markets for a single city/day event).
     """
-    params = {
-        "limit": limit,
-        "offset": offset,
-        "tag_slug": "weather",  # Gamma API supports tag filtering
-        "order": "volume",
-        "ascending": "false",
-    }
-    if active_only:
-        params["active"] = "true"
-        params["closed"] = "false"
-
-    resp = requests.get(f"{GAMMA_BASE}/markets", params=params, timeout=30)
-    resp.raise_for_status()
-    markets = resp.json()
-
-    # Also try a keyword search as fallback / supplement
-    if not markets:
-        markets = _keyword_search_markets(limit)
-
-    return markets
-
-
-def _keyword_search_markets(limit: int = 100) -> list[dict]:
-    """Fallback: search by keyword if tag query returns nothing."""
-    all_markets = []
-    for kw in ["temperature", "degrees fahrenheit", "degrees celsius"]:
-        params = {"limit": limit, "q": kw, "order": "volume", "ascending": "false"}
-        try:
-            resp = requests.get(f"{GAMMA_BASE}/markets", params=params, timeout=30)
-            resp.raise_for_status()
-            all_markets.extend(resp.json())
-        except requests.HTTPError:
-            pass
+    all_events: list[dict] = []
+    for kw in ["highest temperature", "lowest temperature"]:
+        resp = requests.get(
+            f"{GAMMA_BASE}/events",
+            params={"limit": limit, "q": kw, "order": "startDate", "ascending": "false"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        all_events.extend(resp.json())
         time.sleep(0.2)
 
-    # deduplicate by conditionId
-    seen = set()
-    unique = []
-    for m in all_markets:
-        cid = m.get("conditionId") or m.get("id")
-        if cid not in seen:
-            seen.add(cid)
-            unique.append(m)
+    # Deduplicate by event id and keep only genuine weather events
+    seen: set = set()
+    unique: list[dict] = []
+    for e in all_events:
+        if e["id"] not in seen and _is_weather_event(e):
+            seen.add(e["id"])
+            unique.append(e)
     return unique
 
 
-def extract_token_ids(market: dict) -> list[dict]:
+def get_weather_markets_from_events(events: list[dict]) -> list[dict]:
     """
-    Return [{token_id, outcome, price}, ...] for a market's YES/NO tokens.
+    Flatten events into individual market dicts, each with token_ids parsed.
+    """
+    markets = []
+    for event in events:
+        for m in event.get("markets", []):
+            markets.append(parse_market(m, event))
+    return markets
 
-    Polymarket binary markets have two tokens (outcome shares).
-    """
-    tokens = market.get("tokens", [])
-    return [
+
+def parse_market(m: dict, event: Optional[dict] = None) -> dict:
+    """Extract the fields we care about from a Gamma market dict."""
+    raw_tokens = m.get("clobTokenIds", "[]")
+    try:
+        token_ids: list[str] = json.loads(raw_tokens) if isinstance(raw_tokens, str) else raw_tokens
+    except (json.JSONDecodeError, TypeError):
+        token_ids = []
+
+    raw_outcomes = m.get("outcomes", '["Yes","No"]')
+    try:
+        outcomes: list[str] = json.loads(raw_outcomes) if isinstance(raw_outcomes, str) else raw_outcomes
+    except (json.JSONDecodeError, TypeError):
+        outcomes = ["Yes", "No"]
+
+    raw_prices = m.get("outcomePrices", "[null,null]")
+    try:
+        prices: list = json.loads(raw_prices) if isinstance(raw_prices, str) else raw_prices
+    except (json.JSONDecodeError, TypeError):
+        prices = []
+
+    tokens = [
         {
-            "token_id": t.get("token_id"),
-            "outcome": t.get("outcome"),
-            "price": t.get("price"),
+            "token_id": tid,
+            "outcome": outcomes[i] if i < len(outcomes) else f"outcome_{i}",
+            "price": float(prices[i]) if i < len(prices) and prices[i] is not None else None,
         }
-        for t in tokens
-        if t.get("token_id")
+        for i, tid in enumerate(token_ids)
     ]
 
-
-def summarize_market(market: dict) -> dict:
-    """Flatten a market dict to the fields we care about."""
     return {
-        "id": market.get("id"),
-        "condition_id": market.get("conditionId"),
-        "question": market.get("question"),
-        "slug": market.get("slug"),
-        "active": market.get("active"),
-        "closed": market.get("closed"),
-        "start_date": market.get("startDate"),
-        "end_date": market.get("endDate"),
-        "volume": market.get("volume"),
-        "liquidity": market.get("liquidity"),
-        "tokens": extract_token_ids(market),
+        "id": m.get("id"),
+        "condition_id": m.get("conditionId"),
+        "question": m.get("question"),
+        "slug": m.get("slug"),
+        "active": m.get("active"),
+        "closed": m.get("closed"),
+        "start_date": m.get("startDate"),
+        "end_date": m.get("endDate"),
+        "volume": m.get("volumeNum") or m.get("volume"),
+        "liquidity": m.get("liquidityNum") or m.get("liquidity"),
+        "neg_risk": m.get("negRisk", False),
+        "neg_risk_market_id": m.get("negRiskMarketID"),
+        "resolution_source": m.get("resolutionSource"),
+        "tokens": tokens,
+        "event_title": event.get("title") if event else None,
+        "event_slug": event.get("slug") if event else None,
     }

@@ -1,130 +1,178 @@
-"""Fetch trade history for a Polymarket market via the CLOB API."""
+"""
+Fetch weather trade history from Polymarket's public data API.
+
+Strategy:
+1. Pull the global recent trade feed to discover active weather market wallets.
+2. For each unique wallet, fetch their full activity history via the per-wallet endpoint.
+3. Filter all activity for weather market trades only.
+
+This gives us days of history per wallet without requiring CLOB API authentication.
+"""
 
 import time
 import requests
 from typing import Optional
 
-CLOB_BASE = "https://clob.polymarket.com"
-END_CURSOR = "LTE="   # signals last page in Polymarket pagination
-DEFAULT_CURSOR = "MA=="
+DATA_API = "https://data-api.polymarket.com"
+FEED_PAGE_SIZE = 500    # global feed page size
+WALLET_PAGE_SIZE = 500  # per-wallet activity page size
+FEED_MAX_OFFSET = 3000  # data-api hard limit
 
 
-def get_trades_for_token(
-    token_id: str,
-    maker_address: Optional[str] = None,
-    after_ts: Optional[int] = None,
-    before_ts: Optional[int] = None,
-    max_pages: int = 50,
-    sleep_between: float = 0.25,
-) -> list[dict]:
+def _is_weather(trade: dict) -> bool:
+    title = (trade.get("title") or "").lower()
+    return any(kw in title for kw in ["temperature", "°c", "°f", "fahrenheit", "celsius"])
+
+
+def collect_weather_wallets(
+    token_ids: Optional[set] = None,
+    sleep_between: float = 0.1,
+) -> set[str]:
     """
-    Fetch all trades for a given outcome token (asset_id).
-
-    Parameters
-    ----------
-    token_id      : The outcome token ID (from market["tokens"][n]["token_id"])
-    maker_address : Optional wallet filter — only return trades where this
-                    address was the maker.
-    after_ts      : Unix timestamp lower bound (inclusive).
-    before_ts     : Unix timestamp upper bound (inclusive).
-    max_pages     : Safety cap on pagination loops.
-
-    Returns
-    -------
-    List of trade dicts. Each dict contains:
-        trade_id, asset_id, market (condition_id),
-        side ("BUY"/"SELL"), price, size,
-        maker_address, taker_address,
-        timestamp, type, fee_rate_bps
+    Scrape the global public trade feed and return all unique wallet addresses
+    that traded in weather markets.
     """
-    trades = []
-    cursor = DEFAULT_CURSOR
-
-    for _ in range(max_pages):
-        params = {
-            "asset_id": token_id,
-            "next_cursor": cursor,
-        }
-        if maker_address:
-            params["maker_address"] = maker_address
-        if after_ts is not None:
-            params["after"] = after_ts
-        if before_ts is not None:
-            params["before"] = before_ts
-
+    wallets: set[str] = set()
+    for offset in range(0, FEED_MAX_OFFSET + 1, FEED_PAGE_SIZE):
         resp = requests.get(
-            f"{CLOB_BASE}/data/trades",
-            params=params,
+            f"{DATA_API}/trades",
+            params={"limit": FEED_PAGE_SIZE, "offset": offset},
             timeout=30,
         )
-        resp.raise_for_status()
-        body = resp.json()
-
-        page_trades = body.get("data", [])
-        trades.extend(page_trades)
-
-        cursor = body.get("next_cursor", END_CURSOR)
-        if cursor == END_CURSOR or not page_trades:
+        if not resp.ok:
             break
+        page = resp.json()
+        if not page:
+            break
+
+        for t in page:
+            is_weather = (
+                t.get("asset") in token_ids if token_ids
+                else _is_weather(t)
+            )
+            if is_weather and t.get("proxyWallet"):
+                wallets.add(t["proxyWallet"])
+
+        time.sleep(sleep_between)
+
+    return wallets
+
+
+def fetch_wallet_weather_trades(
+    wallet: str,
+    token_ids: Optional[set] = None,
+    min_timestamp: Optional[int] = None,
+    max_pages: int = 20,
+    sleep_between: float = 0.15,
+) -> list[dict]:
+    """
+    Fetch all weather activity for a single wallet via the per-wallet endpoint.
+    Returns filtered list of raw trade dicts.
+    """
+    trades = []
+    for page in range(max_pages):
+        offset = page * WALLET_PAGE_SIZE
+        resp = requests.get(
+            f"{DATA_API}/activity",
+            params={"user": wallet, "limit": WALLET_PAGE_SIZE, "offset": offset},
+            timeout=30,
+        )
+        if not resp.ok:
+            break
+        page_data = resp.json()
+        if not isinstance(page_data, list) or not page_data:
+            break
+
+        for t in page_data:
+            if t.get("type") != "TRADE":
+                continue
+            is_weather = (
+                t.get("asset") in token_ids if token_ids
+                else _is_weather(t)
+            )
+            if is_weather:
+                t["proxyWallet"] = wallet
+                trades.append(t)
+
+        # Stop if we've gone past our time window
+        if min_timestamp is not None:
+            oldest = min(t["timestamp"] for t in page_data)
+            if oldest < min_timestamp:
+                break
 
         time.sleep(sleep_between)
 
     return trades
 
 
-def get_trades_for_market(
-    market: dict,
-    after_ts: Optional[int] = None,
-    before_ts: Optional[int] = None,
-    max_pages: int = 50,
-) -> list[dict]:
+def get_weather_trades(
+    token_ids: Optional[set] = None,
+    min_timestamp: Optional[int] = None,
+    max_wallet_pages: int = 10,
+) -> tuple[list[dict], set[str]]:
     """
-    Fetch trades for ALL outcome tokens in a market and tag each trade
-    with the outcome label (e.g. "YES >= 75°F", "NO").
-    """
-    all_trades = []
-    for token in market.get("tokens", []):
-        token_id = token.get("token_id")
-        outcome = token.get("outcome", "UNKNOWN")
-        if not token_id:
-            continue
+    Full pipeline: discover wallets from global feed, then fetch each wallet's
+    complete weather trade history.
 
-        trades = get_trades_for_token(
-            token_id,
-            after_ts=after_ts,
-            before_ts=before_ts,
-            max_pages=max_pages,
+    Returns
+    -------
+    (trades, wallets)  where trades is a list of raw trade dicts and
+                       wallets is the set of discovered wallet addresses.
+    """
+    print("  Step 1: scanning global feed for weather market wallets…")
+    wallets = collect_weather_wallets(token_ids=token_ids)
+    print(f"  Found {len(wallets)} unique weather market wallets")
+
+    print("  Step 2: fetching per-wallet trade history…")
+    all_trades: list[dict] = []
+    for i, wallet in enumerate(wallets):
+        trades = fetch_wallet_weather_trades(
+            wallet,
+            token_ids=token_ids,
+            min_timestamp=min_timestamp,
+            max_pages=max_wallet_pages,
         )
-        for t in trades:
-            t["outcome"] = outcome
-            t["market_question"] = market.get("question", "")
         all_trades.extend(trades)
+        if (i + 1) % 20 == 0:
+            print(f"    {i+1}/{len(wallets)} wallets processed, {len(all_trades):,} trades so far")
 
-    return all_trades
+    # Deduplicate by (wallet, tx_hash, asset)
+    seen: set[tuple] = set()
+    unique: list[dict] = []
+    for t in all_trades:
+        key = (t.get("proxyWallet"), t.get("transactionHash"), t.get("asset"))
+        if key not in seen:
+            seen.add(key)
+            unique.append(t)
+
+    return unique, wallets
 
 
 def normalize_trade(raw: dict) -> dict:
     """
-    Map raw CLOB trade fields to a clean, consistent schema.
+    Map raw data-api activity fields to a clean, consistent schema.
 
-    Raw field reference (from Polymarket CLOB API):
-        id, asset_id, market, side, price, size,
-        maker_address, taker_address, timestamp,
-        type, fee_rate_bps, outcome, market_question
+    Raw field reference (data-api.polymarket.com/activity):
+        proxyWallet, timestamp (unix int), conditionId,
+        type, size, usdcSize, transactionHash, price,
+        asset (token_id), side, outcomeIndex,
+        title, slug, outcome, name, pseudonym
     """
+    price = float(raw.get("price") or 0)
+    size = float(raw.get("size") or 0)
     return {
-        "trade_id": raw.get("id"),
-        "timestamp": raw.get("timestamp"),       # ISO-8601 string
-        "asset_id": raw.get("asset_id"),
-        "condition_id": raw.get("market"),
+        "tx_hash": raw.get("transactionHash"),
+        "timestamp": raw.get("timestamp"),           # unix int
+        "asset_id": raw.get("asset"),
+        "condition_id": raw.get("conditionId"),
+        "market_question": raw.get("title"),
         "outcome": raw.get("outcome"),
-        "market_question": raw.get("market_question"),
-        "side": raw.get("side"),                 # "BUY" or "SELL"
-        "price": float(raw.get("price") or 0),   # 0–1 probability
-        "size": float(raw.get("size") or 0),     # shares traded
-        "usd_value": float(raw.get("price") or 0) * float(raw.get("size") or 0),
-        "maker_address": raw.get("maker_address"),
-        "taker_address": raw.get("taker_address"),
-        "type": raw.get("type"),                 # "MATCH" etc.
-        "fee_rate_bps": raw.get("fee_rate_bps"),
+        "outcome_index": raw.get("outcomeIndex"),
+        "side": raw.get("side"),                     # "BUY" or "SELL"
+        "price": price,                              # 0–1 probability
+        "size": size,                                # shares
+        "usd_value": float(raw.get("usdcSize") or price * size),
+        "wallet": raw.get("proxyWallet"),
+        "name": raw.get("name"),
+        "pseudonym": raw.get("pseudonym"),
     }

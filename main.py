@@ -2,11 +2,11 @@
 """
 poly_weather_whale_finder — main entry point
 
-Pulls weather markets from Polymarket, fetches all trade history,
-and prints a report on wallets that appear to front-run price moves.
+Pulls weather markets from Polymarket, fetches all publicly visible trade history,
+and reports on wallets that appear to front-run price moves.
 
 Usage:
-    python main.py [--active-only] [--days 30] [--min-move 0.05] [--save]
+    python main.py [--days 3] [--min-move 0.05] [--save] [--pages 50]
 """
 
 import argparse
@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.markets import get_weather_markets, summarize_market
-from src.trades import get_trades_for_market, normalize_trade
+from src.markets import get_weather_events, get_weather_markets_from_events
+from src.trades import get_weather_trades, normalize_trade
 from src.analysis import (
     trades_to_df,
     price_move_events,
@@ -32,77 +32,85 @@ DATA_PROC = Path("data/processed")
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Find fast-feed weather traders on Polymarket")
-    p.add_argument("--active-only", action="store_true", help="Only fetch active (unclosed) markets")
-    p.add_argument("--days", type=int, default=30, help="How many days back to fetch trades (default: 30)")
-    p.add_argument("--min-move", type=float, default=0.05, help="Minimum hourly price move to flag (default: 0.05)")
+    p.add_argument("--days", type=int, default=3, help="How many days back to fetch (default: 3)")
+    p.add_argument("--pages", type=int, default=5, help="Max pages per wallet from activity feed (500 trades/page)")
+    p.add_argument("--min-move", type=float, default=0.05, help="Min hourly price move to flag (default: 0.05)")
     p.add_argument("--lead-minutes", type=int, default=15, help="Lead window before a move (default: 15)")
     p.add_argument("--save", action="store_true", help="Save raw and processed data to data/")
-    p.add_argument("--limit", type=int, default=50, help="Max markets to fetch (default: 50)")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
 
-    after_ts = int((datetime.now(timezone.utc) - timedelta(days=args.days)).timestamp())
+    min_timestamp = int((datetime.now(timezone.utc) - timedelta(days=args.days)).timestamp())
 
     # ── 1. Discover weather markets ────────────────────────────────────────
-    print(f"Fetching weather markets (limit={args.limit}, active_only={args.active_only})…")
-    raw_markets = get_weather_markets(limit=args.limit, active_only=args.active_only)
-    markets = [summarize_market(m) for m in raw_markets]
-    print(f"  Found {len(markets)} markets")
+    print("Fetching weather events from Gamma API…")
+    events = get_weather_events(limit=100)
+    markets = get_weather_markets_from_events(events)
 
-    if not markets:
-        print("No weather markets found. Try removing --active-only or check the API.")
-        return
+    # Build a set of all known weather token IDs for fast filtering
+    token_id_set: set[str] = set()
+    token_meta: dict[str, dict] = {}   # token_id → {question, outcome, condition_id}
+    for m in markets:
+        for t in m["tokens"]:
+            tid = t["token_id"]
+            token_id_set.add(tid)
+            token_meta[tid] = {
+                "market_question": m["question"],
+                "outcome": t["outcome"],
+                "condition_id": m["condition_id"],
+            }
+
+    print(f"  {len(events)} events → {len(markets)} markets → {len(token_id_set)} outcome tokens")
 
     if args.save:
         DATA_RAW.mkdir(parents=True, exist_ok=True)
-        (DATA_RAW / "markets.json").write_text(json.dumps(markets, indent=2))
-        print(f"  Saved markets → {DATA_RAW / 'markets.json'}")
+        (DATA_RAW / "markets.json").write_text(json.dumps(markets, indent=2, default=str))
 
-    for m in markets[:5]:
-        print(f"  • {m['question'][:80]}  vol=${m.get('volume') or 0:,.0f}")
+    # Preview top markets
+    top = sorted(markets, key=lambda m: float(m.get("volume") or 0), reverse=True)[:5]
+    for m in top:
+        print(f"  • {m['question'][:75]}  vol=${float(m.get('volume') or 0):,.0f}")
 
     # ── 2. Fetch trades ────────────────────────────────────────────────────
-    all_trades_raw = []
-    for i, market in enumerate(markets):
-        q = market["question"][:60]
-        print(f"\n[{i+1}/{len(markets)}] {q}…")
-        raw = get_trades_for_market(market, after_ts=after_ts)
-        print(f"  → {len(raw)} trades")
-        all_trades_raw.extend(raw)
-        time.sleep(0.3)
+    print(f"\nFetching trade history (last {args.days} days, wallet-by-wallet)…")
+    raw_trades, wallets = get_weather_trades(
+        token_ids=token_id_set,
+        min_timestamp=min_timestamp,
+        max_wallet_pages=args.pages,
+    )
 
-    print(f"\nTotal raw trades fetched: {len(all_trades_raw):,}")
+    # Filter by timestamp (belt-and-suspenders)
+    raw_trades = [t for t in raw_trades if t.get("timestamp", 0) >= min_timestamp]
 
-    if not all_trades_raw:
-        print("No trades found. The market may have no activity in this period.")
+    print(f"  {len(raw_trades):,} weather trades from {len(wallets)} wallets")
+
+    if not raw_trades:
+        print("No trades in window. Try --days 7 or --pages 200.")
         return
 
     if args.save:
-        (DATA_RAW / "trades_raw.json").write_text(json.dumps(all_trades_raw, indent=2))
-        print(f"Saved raw trades → {DATA_RAW / 'trades_raw.json'}")
+        (DATA_RAW / "trades_raw.json").write_text(json.dumps(raw_trades, indent=2, default=str))
 
     # ── 3. Normalize ───────────────────────────────────────────────────────
-    normalized = [normalize_trade(t) for t in all_trades_raw]
+    normalized = [normalize_trade(t) for t in raw_trades]
     df = trades_to_df(normalized)
 
     if args.save:
         DATA_PROC.mkdir(parents=True, exist_ok=True)
         df.to_csv(DATA_PROC / "trades.csv", index=False)
-        print(f"Saved normalized trades → {DATA_PROC / 'trades.csv'}")
 
     # ── 4. Analyze ─────────────────────────────────────────────────────────
-    events = price_move_events(df, window="1h", min_move=args.min_move)
-    movers = early_movers(df, events, lead_minutes=args.lead_minutes)
+    events_df = price_move_events(df, window="1h", min_move=args.min_move)
+    movers = early_movers(df, events_df, lead_minutes=args.lead_minutes)
 
     if args.save and not movers.empty:
         movers.to_csv(DATA_PROC / "early_movers.csv", index=False)
-        print(f"Saved early movers → {DATA_PROC / 'early_movers.csv'}")
 
     # ── 5. Report ──────────────────────────────────────────────────────────
-    print_report(df, events, movers)
+    print_report(df, events_df, movers)
 
 
 if __name__ == "__main__":

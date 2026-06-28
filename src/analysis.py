@@ -12,7 +12,7 @@ def trades_to_df(normalized_trades: list[dict]) -> pd.DataFrame:
     df = pd.DataFrame(normalized_trades)
     if df.empty:
         return df
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
     df = df.sort_values("timestamp").reset_index(drop=True)
     return df
 
@@ -29,9 +29,11 @@ def wallet_summary(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     rows = []
-    for wallet, grp in df.groupby("maker_address"):
+    for wallet, grp in df.groupby("wallet"):
+        name = grp["name"].iloc[0] if "name" in grp.columns else ""
         rows.append({
             "wallet": wallet,
+            "name": name,
             "trade_count": len(grp),
             "total_usd": grp["usd_value"].sum(),
             "markets_traded": grp["condition_id"].nunique(),
@@ -75,7 +77,8 @@ def price_move_events(
                     "price_delta": delta,
                     "direction": "UP" if delta > 0 else "DOWN",
                 })
-    return pd.DataFrame(events).sort_values("window_start")
+    result = pd.DataFrame(events)
+    return result.sort_values("window_start") if not result.empty else result
 
 
 def early_movers(
@@ -120,7 +123,7 @@ def early_movers(
         if correct.empty:
             continue
 
-        for wallet, wgrp in correct.groupby("maker_address"):
+        for wallet, wgrp in correct.groupby("wallet"):
             avg_lead = (window_start - wgrp["timestamp"]).dt.total_seconds().mean() / 60
             rows.append({
                 "wallet": wallet,
@@ -157,7 +160,7 @@ def print_report(df: pd.DataFrame, events: pd.DataFrame, movers: pd.DataFrame) -
     """Print a quick console summary of findings."""
     print(f"\n{'='*60}")
     print(f"TRADES LOADED : {len(df):,}")
-    print(f"UNIQUE WALLETS: {df['maker_address'].nunique():,}")
+    print(f"UNIQUE WALLETS: {df['wallet'].nunique():,}")
     print(f"PRICE EVENTS  : {len(events):,}  (≥5¢ move per hour)")
     print(f"{'='*60}\n")
 

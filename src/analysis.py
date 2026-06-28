@@ -12,7 +12,7 @@ def trades_to_df(normalized_trades: list[dict]) -> pd.DataFrame:
     df = pd.DataFrame(normalized_trades)
     if df.empty:
         return df
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     df = df.sort_values("timestamp").reset_index(drop=True)
     return df
 

@@ -72,15 +72,25 @@ CSV_FIELDS = [
     "taker_outcome_side", "taker_book_side", "is_block_trade",
 ]
 
-# Standard KXHIGHLAX bin pattern: 2°F-wide bins from ~62°F to 86°F.
+# Standard KXHIGHLAX bin pattern: 2°F-wide bins.
 # Format: KXHIGHLAX-<YY><MON><DD>-<BIN>
-# Bins observed across recent seasons; extra ones simply return 0 trades.
+#
+# The "below" and "above" tail bins use Tx naming where x is the threshold:
+#   "67° or below" → T67   "76° or above" → T76
+#   "69° or below" → T69   "78° or above" → T78  etc.
+# The between bins use Bx.5 (midpoint of the 2°F range):
+#   "68° to 69°" → B68.5   "70° to 71°" → B70.5  etc.
+#
+# We probe a wide range; tickers not offered on a given event simply 404.
 _KXHIGHLAX_BIN_SUFFIXES = [
-    "T62",                                          # below-62 (all-NO bin)
+    # below-threshold tail bins (Kalshi names the floor, e.g. T67 = ≤67°F)
+    "T60", "T62", "T64", "T66", "T67", "T68", "T69", "T70",
+    # between bins (2°F wide, labelled by midpoint)
     "B62.5", "B64.5", "B66.5", "B68.5", "B70.5",
     "B72.5", "B74.5", "B76.5", "B78.5", "B80.5",
     "B82.5", "B84.5",
-    "T86",                                          # above-86
+    # above-threshold tail bins
+    "T74", "T75", "T76", "T77", "T78", "T80", "T82", "T84", "T86",
 ]
 
 # ── logging ───────────────────────────────────────────────────────────────────

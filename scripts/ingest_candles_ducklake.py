@@ -60,11 +60,14 @@ HIST_TRADES_EP  = f"{KALSHI_BASE}/historical/trades"
 CANDLES_EP_TMPL = f"{KALSHI_BASE}/historical/markets/{{ticker}}/candlesticks"
 
 _KXHIGHLAX_BIN_SUFFIXES = [
-    "T60", "T62", "T64", "T66", "T67", "T68", "T69", "T70",
-    "B62.5", "B64.5", "B66.5", "B68.5", "B70.5",
-    "B72.5", "B74.5", "B76.5", "B78.5", "B80.5",
-    "B82.5", "B84.5",
-    "T74", "T75", "T76", "T77", "T78", "T80", "T82", "T84", "T86",
+    # below-tail (T{x} = "x-1° or below")
+    "T60", "T61", "T62", "T63", "T64", "T65", "T66", "T67", "T68", "T69", "T70", "T71", "T72",
+    # between-bins (B{x}.5 = "x° to x+1°") — both even and odd bases
+    "B61.5", "B62.5", "B63.5", "B64.5", "B65.5", "B66.5", "B67.5", "B68.5", "B69.5", "B70.5",
+    "B71.5", "B72.5", "B73.5", "B74.5", "B75.5", "B76.5", "B77.5", "B78.5", "B79.5", "B80.5",
+    "B81.5", "B82.5", "B83.5", "B84.5", "B85.5",
+    # above-tail (T{x} = "x+1° or above")
+    "T73", "T74", "T75", "T76", "T77", "T78", "T79", "T80", "T82", "T84", "T86",
 ]
 
 logging.basicConfig(

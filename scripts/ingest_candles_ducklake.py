@@ -156,6 +156,10 @@ def fetch_candles(ticker, start_ts, end_ts, interval=1, rate_sleep=0.15) -> list
             log.debug("  %s: candlestick 404 (no data), skipping", ticker)
             return []
         raise
+    if body.get("error"):
+        log.warning("  %s: API error — %s (market not yet in historical archive?)",
+                    ticker, body["error"].get("code", "unknown"))
+        return []
     rows = []
     for c in (body.get("candlesticks") or []):
         ts  = c.get("end_period_ts")

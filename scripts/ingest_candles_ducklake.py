@@ -149,7 +149,13 @@ def discover_tickers(event_ticker, start_ts, end_ts, probe=False, explicit=None,
 
 def fetch_candles(ticker, start_ts, end_ts, interval=1, rate_sleep=0.15) -> list[dict]:
     url  = CANDLES_EP_TMPL.format(ticker=ticker)
-    body = get_with_retry(url, {"start_ts": start_ts, "end_ts": end_ts, "period_interval": interval}, rate_sleep=rate_sleep)
+    try:
+        body = get_with_retry(url, {"start_ts": start_ts, "end_ts": end_ts, "period_interval": interval}, rate_sleep=rate_sleep)
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            log.debug("  %s: candlestick 404 (no data), skipping", ticker)
+            return []
+        raise
     rows = []
     for c in (body.get("candlesticks") or []):
         ts  = c.get("end_period_ts")

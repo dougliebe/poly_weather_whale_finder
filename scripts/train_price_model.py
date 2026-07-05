@@ -44,8 +44,8 @@ log = logging.getLogger(__name__)
 
 TRAIN_END  = "2025-08-31"
 TEST_START = "2025-09-01"
-TARGET_COL = "target_ask_open_30"
-CURRENT_PRICE_COL = "yes_ask_close"  # price at T, used for naive benchmark
+TARGET_COL = "target_move_30"
+CURRENT_PRICE_COL = "yes_ask_close"  # price at T, kept for per-ticker stats
 
 FEATURE_SETS = {
     "baseline": [
@@ -59,8 +59,8 @@ FEATURE_SETS = {
         "spread_lag1", "spread_lag5",
         "has_trade", "vol_sum_5", "vol_sum_15",
         "oi_change_1", "oi_change_5", "oi_change_15",
-        "mid_vol_15",
-        "price_previous",
+        "mid_vol_15", "price_previous",
+        "minute_of_hour",
     ],
     "model2_cross": [
         "yes_ask_close", "mid_close", "spread",
@@ -71,7 +71,9 @@ FEATURE_SETS = {
         "has_trade", "vol_sum_5", "vol_sum_15",
         "oi_change_1", "oi_change_5", "oi_change_15",
         "mid_vol_15", "price_previous",
-        # cross-ticker
+        "minute_of_hour",
+        # cross-ticker (model2 adds these on top of model1)
+
         "sum_mid_all", "rel_mid", "prob_sum_deviation",
         "relative_spread", "avg_spread_all", "spread_dispersion",
         "n_tickers_at_bar",
@@ -89,7 +91,7 @@ FEATURE_SETS = {
         "relative_spread", "avg_spread_all", "spread_dispersion",
         "n_tickers_at_bar",
         # time-of-day
-        "bar_hour", "bar_minute", "tod_sin", "tod_cos",
+        "bar_hour", "minute_of_hour", "tod_sin", "tod_cos",
     ],
 }
 
@@ -128,7 +130,7 @@ FEATURE_CATEGORIES = {
     "spread_dispersion": "cross",
     "n_tickers_at_bar": "cross",
     "bar_hour": "time",
-    "bar_minute": "time",
+    "minute_of_hour": "time",
     "tod_sin": "time",
     "tod_cos": "time",
 }
@@ -174,10 +176,11 @@ def evaluate(name: str, y_true, y_pred, y_current) -> dict:
     mae  = mean_absolute_error(y_true, y_pred)
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
     r2   = r2_score(y_true, y_pred)
-    dir_actual    = (np.array(y_true) - np.array(y_current)) > 0
-    dir_predicted = (np.array(y_pred) - np.array(y_current)) > 0
+    # target_move_30 is already a delta; directional accuracy = correct sign prediction
+    dir_actual    = np.array(y_true) > 0
+    dir_predicted = np.array(y_pred) > 0
     dir_acc = float((dir_actual == dir_predicted).mean())
-    naive_mae = mean_absolute_error(y_true, y_current)
+    naive_mae = mean_absolute_error(y_true, np.zeros_like(y_true))  # naive: predict no change
     vs_naive  = (naive_mae - mae) / naive_mae * 100  # positive = improvement
     return {
         "model": name, "MAE": mae, "RMSE": rmse, "R2": r2,
@@ -244,12 +247,12 @@ def write_report(
                  f"({len(df_test):,} rows)")
 
     h("Methodology")
-    p("- **Target**: `yes_ask_open` at T+30 minutes — the best ask price 30 1-minute bars ahead")
+    p("- **Target**: `target_move_30` = `yes_ask_open` at T+30 minus `yes_ask_close` at T — the 30-min price move")
     p("- **Train/Test split**: purely temporal (no shuffling) — 2025-06-01–2025-08-31 train, "
       "2025-09-01–2025-09-30 test")
     p("- **NaN handling**: median imputation fit on training set only, applied to test")
     p("- **Prices**: decimal scale (0–1), where 0.72 = 72¢ / 72% implied probability")
-    p("- **Naive benchmark**: predict no change (forecast = current `yes_ask_close`)")
+    p("- **Naive benchmark**: predict zero price change (move = 0)")
     p("- **Evaluation**: MAE, RMSE, R², directional accuracy, % improvement vs naive")
 
     h("Model Comparison")
@@ -323,9 +326,9 @@ def write_report(
     model_maes  = {m["model"]: m["MAE"] for m in metrics}
     model_keys  = list(model_maes.keys())
 
-    p(f"1. **Current ask dominates**: `yes_ask_close` is the single strongest linear predictor "
-      f"(rank 1 in both linear and GBM models), confirming price persistence — the 30-min ahead "
-      f"ask is strongly anchored to the current ask.")
+    p(f"1. **Top linear predictors**: {', '.join('`'+f+'`' for f in top3_linear)} — "
+      f"features ranked by normalized coefficient weight after scaling. "
+      f"With a relative (move) target, price-level features carry less weight than momentum/flow signals.")
 
     m1_lift = model_maes.get("baseline", 0) - model_maes.get("model1_momentum", 0)
     p(f"2. **Momentum features provide modest lift**: Model 1 (momentum) reduces MAE by "

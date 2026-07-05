@@ -58,21 +58,15 @@ WITH base AS (
         volume,
         open_interest,
         price_previous,
-        -- time-of-day
-        EXTRACT(hour   FROM end_period_utc)::INTEGER                        AS bar_hour,
-        EXTRACT(minute FROM end_period_utc)::INTEGER                        AS bar_minute,
-        -- cyclic time encoding (fraction of day in minutes)
-        SIN(2.0 * {pi} * (
-              EXTRACT(hour FROM end_period_utc) * 60
-            + EXTRACT(minute FROM end_period_utc)
-        ) / 1440.0)                                                         AS tod_sin,
-        COS(2.0 * {pi} * (
-              EXTRACT(hour FROM end_period_utc) * 60
-            + EXTRACT(minute FROM end_period_utc)
-        ) / 1440.0)                                                         AS tod_cos,
+        -- time-of-day (epoch arithmetic guarantees UTC; no DST/timezone dependency)
+        (end_period_ts % 86400 / 3600)::INTEGER                             AS bar_hour,
+        (end_period_ts % 3600  / 60)::INTEGER                               AS minute_of_hour,
+        SIN(2.0 * {pi} * (end_period_ts % 86400) / 86400.0)                AS tod_sin,
+        COS(2.0 * {pi} * (end_period_ts % 86400) / 86400.0)                AS tod_cos,
         CASE WHEN volume > 0 THEN 1 ELSE 0 END                             AS has_trade
     FROM candles
     WHERE interval_min = 1
+      AND trade_date::DATE = strptime(split_part(ticker, '-', 2), '%y%b%d')::DATE
 ),
 
 lagged AS (
@@ -139,7 +133,8 @@ with_target AS (
     SELECT
         f.*,
         t30.yes_ask_open                              AS target_ask_open_30,
-        (t30.yes_ask_open + t30.yes_bid_open) / 2.0  AS target_mid_30
+        (t30.yes_ask_open + t30.yes_bid_open) / 2.0  AS target_mid_30,
+        t30.yes_ask_open - f.yes_ask_close            AS target_move_30
     FROM with_cross f
     LEFT JOIN base t30
       ON  f.ticker     = t30.ticker
@@ -148,7 +143,7 @@ with_target AS (
 )
 
 SELECT * FROM with_target
-WHERE target_ask_open_30 IS NOT NULL
+WHERE target_move_30 IS NOT NULL
 ORDER BY ticker, trade_date, end_period_ts
 """.format(pi=math.pi)
 

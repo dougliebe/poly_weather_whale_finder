@@ -1,16 +1,19 @@
 """
 train_price_model.py
 ────────────────────────────────────────────────────────────────────────────
-Trains 5 progressively richer models to predict yes_ask_open 30 min ahead,
-evaluates on a temporal hold-out, and writes reports/feature_importance.md.
+Trains progressively richer Ridge regression models to predict the 30-min
+price move (target_move_30), evaluates on a temporal hold-out, and writes
+reports/feature_importance.md.
 
 Models
 ------
-  baseline      — Ridge on yes_ask_close only (current ask = prediction)
-  model1        — + own-ticker momentum features (lags, spread, OI, volume)
-  model2        — + cross-ticker probability conservation features
-  model3        — + time-of-day features
-  model4_gbm    — LightGBM on all features
+  baseline      — Ridge on yes_ask_close only
+  model1        — + momentum (lags, spread, OI, volume)
+  model2        — + cross-ticker probability conservation
+  model3        — + time-of-day (hour, minute, tod_sin/cos)
+  model4        — + volume burst signals (z-score, ratio, OI acceleration)
+  model5        — + METAR timing + time-to-resolution features
+  model6_gbm    — LightGBM on all features
 
 Usage
 -----
@@ -47,92 +50,86 @@ TEST_START = "2025-09-01"
 TARGET_COL = "target_move_30"
 CURRENT_PRICE_COL = "yes_ask_close"  # price at T, kept for per-ticker stats
 
+_MOMENTUM = [
+    "yes_ask_close", "mid_close", "spread",
+    "mid_ret_1", "mid_ret_5", "mid_ret_15", "mid_ret_30",
+    "ask_lag1", "ask_lag5", "ask_lag15",
+    "ask_intrabar_range", "bid_intrabar_range",
+    "spread_lag1", "spread_lag5",
+    "has_trade", "vol_sum_5", "vol_sum_15",
+    "oi_change_1", "oi_change_5", "oi_change_15",
+    "mid_vol_15", "price_previous",
+    "minute_of_hour",
+]
+_CROSS = [
+    "sum_mid_all", "rel_mid", "prob_sum_deviation",
+    "relative_spread", "avg_spread_all", "spread_dispersion",
+    "n_tickers_at_bar", "total_vol_cross", "vol_vs_cross",
+]
+_TOD = [
+    "bar_hour", "minute_of_hour", "tod_sin", "tod_cos",
+]
+_BURST = [
+    "vol_zscore", "vol_ratio", "vol_burst_flag",
+    "oi_accel", "spread_chg_5",
+]
+_RESOLUTION = [
+    "mins_to_peak", "frac_day_elapsed",
+    "price_polarization", "polar_chg_5",
+]
+_METAR = [
+    "bars_since_metar", "minutes_to_next_metar",
+    "is_pre_metar", "is_post_metar",
+]
+
 FEATURE_SETS = {
     "baseline": [
         "yes_ask_close",
     ],
-    "model1_momentum": [
-        "yes_ask_close", "mid_close", "spread",
-        "mid_ret_1", "mid_ret_5", "mid_ret_15", "mid_ret_30",
-        "ask_lag1", "ask_lag5", "ask_lag15",
-        "ask_intrabar_range", "bid_intrabar_range",
-        "spread_lag1", "spread_lag5",
-        "has_trade", "vol_sum_5", "vol_sum_15",
-        "oi_change_1", "oi_change_5", "oi_change_15",
-        "mid_vol_15", "price_previous",
-        "minute_of_hour",
-    ],
-    "model2_cross": [
-        "yes_ask_close", "mid_close", "spread",
-        "mid_ret_1", "mid_ret_5", "mid_ret_15", "mid_ret_30",
-        "ask_lag1", "ask_lag5", "ask_lag15",
-        "ask_intrabar_range", "bid_intrabar_range",
-        "spread_lag1", "spread_lag5",
-        "has_trade", "vol_sum_5", "vol_sum_15",
-        "oi_change_1", "oi_change_5", "oi_change_15",
-        "mid_vol_15", "price_previous",
-        "minute_of_hour",
-        # cross-ticker (model2 adds these on top of model1)
-
-        "sum_mid_all", "rel_mid", "prob_sum_deviation",
-        "relative_spread", "avg_spread_all", "spread_dispersion",
-        "n_tickers_at_bar",
-    ],
-    "model3_tod": [
-        "yes_ask_close", "mid_close", "spread",
-        "mid_ret_1", "mid_ret_5", "mid_ret_15", "mid_ret_30",
-        "ask_lag1", "ask_lag5", "ask_lag15",
-        "ask_intrabar_range", "bid_intrabar_range",
-        "spread_lag1", "spread_lag5",
-        "has_trade", "vol_sum_5", "vol_sum_15",
-        "oi_change_1", "oi_change_5", "oi_change_15",
-        "mid_vol_15", "price_previous",
-        "sum_mid_all", "rel_mid", "prob_sum_deviation",
-        "relative_spread", "avg_spread_all", "spread_dispersion",
-        "n_tickers_at_bar",
-        # time-of-day
-        "bar_hour", "minute_of_hour", "tod_sin", "tod_cos",
-    ],
+    "model1_momentum": _MOMENTUM,
+    "model2_cross":    _MOMENTUM + _CROSS,
+    "model3_tod":      _MOMENTUM + _CROSS + _TOD,
+    "model4_burst":    _MOMENTUM + _CROSS + _TOD + _BURST,
+    "model5_full":     _MOMENTUM + _CROSS + _TOD + _BURST + _RESOLUTION + _METAR,
 }
 
-ALL_FEATURES = FEATURE_SETS["model3_tod"]  # GBM uses all of these
-
+# GBM uses the full feature set (deduped)
+ALL_FEATURES = list(dict.fromkeys(_MOMENTUM + _CROSS + _TOD + _BURST + _RESOLUTION + _METAR))
 
 FEATURE_CATEGORIES = {
-    "yes_ask_close": "anchor",
-    "mid_close": "anchor",
-    "mid_open": "anchor",
-    "spread": "spread",
-    "ask_intrabar_range": "volatility",
-    "bid_intrabar_range": "volatility",
-    "mid_ret_1": "momentum",
-    "mid_ret_5": "momentum",
-    "mid_ret_15": "momentum",
-    "mid_ret_30": "momentum",
-    "ask_lag1": "momentum",
-    "ask_lag5": "momentum",
-    "ask_lag15": "momentum",
-    "spread_lag1": "spread",
-    "spread_lag5": "spread",
-    "has_trade": "flow",
-    "vol_sum_5": "flow",
-    "vol_sum_15": "flow",
-    "oi_change_1": "flow",
-    "oi_change_5": "flow",
-    "oi_change_15": "flow",
-    "mid_vol_15": "volatility",
+    # anchor
+    "yes_ask_close": "anchor", "mid_close": "anchor",
     "price_previous": "anchor",
-    "sum_mid_all": "cross",
-    "rel_mid": "cross",
-    "prob_sum_deviation": "cross",
-    "relative_spread": "cross",
-    "avg_spread_all": "cross",
-    "spread_dispersion": "cross",
-    "n_tickers_at_bar": "cross",
-    "bar_hour": "time",
-    "minute_of_hour": "time",
-    "tod_sin": "time",
-    "tod_cos": "time",
+    # momentum
+    "mid_ret_1": "momentum", "mid_ret_5": "momentum",
+    "mid_ret_15": "momentum", "mid_ret_30": "momentum",
+    "ask_lag1": "momentum", "ask_lag5": "momentum", "ask_lag15": "momentum",
+    # spread
+    "spread": "spread", "spread_lag1": "spread", "spread_lag5": "spread",
+    "spread_chg_5": "spread",
+    # volatility
+    "ask_intrabar_range": "volatility", "bid_intrabar_range": "volatility",
+    "mid_vol_15": "volatility",
+    # flow / volume
+    "has_trade": "flow", "vol_sum_5": "flow", "vol_sum_15": "flow",
+    "oi_change_1": "flow", "oi_change_5": "flow", "oi_change_15": "flow",
+    # volume bursts
+    "vol_zscore": "burst", "vol_ratio": "burst", "vol_burst_flag": "burst",
+    "oi_accel": "burst",
+    # cross-ticker
+    "sum_mid_all": "cross", "rel_mid": "cross", "prob_sum_deviation": "cross",
+    "relative_spread": "cross", "avg_spread_all": "cross",
+    "spread_dispersion": "cross", "n_tickers_at_bar": "cross",
+    "total_vol_cross": "cross", "vol_vs_cross": "cross",
+    # time-of-day
+    "bar_hour": "time", "minute_of_hour": "time",
+    "tod_sin": "time", "tod_cos": "time",
+    # METAR timing
+    "bars_since_metar": "metar", "minutes_to_next_metar": "metar",
+    "is_pre_metar": "metar", "is_post_metar": "metar",
+    # time-to-resolution
+    "mins_to_peak": "resolution", "frac_day_elapsed": "resolution",
+    "price_polarization": "resolution", "polar_chg_5": "resolution",
 }
 
 
@@ -340,13 +337,13 @@ def write_report(
       f"{m2_lift:+.5f}. The sum-of-mids deviation from 1.0 reflects cross-bin arbitrage "
       f"opportunities that briefly predict price moves.")
 
-    m3_lift = model_maes.get("model2_cross", 0) - model_maes.get("model3_tod", 0)
+    m3_lift = model_maes.get("model2_cross", 0) - model_maes.get("model3_tod", 0)  # tod lift
     p(f"4. **Time-of-day**: Adding time features shifts MAE by {m3_lift:+.5f}. The cyclical "
       f"encoding captures METAR observation windows (fires at :53 past each hour) when "
       f"informed traders update positions.")
 
-    gbm_best = model_maes.get("model4_gbm", 0)
-    lin_best = model_maes.get("model3_tod", 0)
+    gbm_best = model_maes.get("model6_gbm", 0)
+    lin_best = model_maes.get("model5_full", 0)
     p(f"5. **Non-linearity**: LightGBM (MAE={gbm_best:.5f}) vs best linear model "
       f"(MAE={lin_best:.5f}) — delta={lin_best - gbm_best:+.5f}. "
       f"{'GBM captures meaningful non-linear interactions.' if gbm_best < lin_best else 'Linear model is competitive; non-linearity adds little.'}")
@@ -418,7 +415,7 @@ def main() -> None:
 
     # ── train GBM ─────────────────────────────────────────────────────────────
     gbm_features = [f for f in ALL_FEATURES if f in df.columns]
-    log.info("Training model4_gbm (%d features)...", len(gbm_features))
+    log.info("Training model6_gbm (%d features)...", len(gbm_features))
     X_train_gbm = train[gbm_features].values
     X_test_gbm  = test[gbm_features].values
 
@@ -426,17 +423,17 @@ def main() -> None:
     gbm_pipe.fit(X_train_gbm, y_train)
     y_pred_gbm = gbm_pipe.predict(X_test_gbm)
 
-    m_gbm = evaluate("model4_gbm", y_test, y_pred_gbm, y_current_test)
+    m_gbm = evaluate("model6_gbm", y_test, y_pred_gbm, y_current_test)
     all_metrics.append(m_gbm)
-    trained_pipelines["model4_gbm"] = (gbm_pipe, gbm_features)
+    trained_pipelines["model6_gbm"] = (gbm_pipe, gbm_features)
     log.info("  MAE=%.5f  RMSE=%.5f  R²=%.4f  DirAcc=%.1f%%  vs_naive=%+.1f%%",
              m_gbm["MAE"], m_gbm["RMSE"], m_gbm["R2"], m_gbm["DirectionalAcc"]*100, m_gbm["vs_naive_pct"])
 
-    with open(args.models_dir / "model4_gbm.pkl", "wb") as fh:
+    with open(args.models_dir / "model6_gbm.pkl", "wb") as fh:
         pickle.dump({"pipeline": gbm_pipe, "features": gbm_features, "metrics": m_gbm}, fh)
 
     # ── feature importance ─────────────────────────────────────────────────────
-    best_linear_pipe, best_linear_features = trained_pipelines["model3_tod"]
+    best_linear_pipe, best_linear_features = trained_pipelines["model5_full"]
     lin_imp = linear_importance(best_linear_pipe, best_linear_features)
 
     gbm_imp = gbm_importance(gbm_pipe, gbm_features)

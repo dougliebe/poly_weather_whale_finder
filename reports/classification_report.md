@@ -1,6 +1,6 @@
 # Kalshi Weather Market: 3-Class Classification (UP / NEUTRAL / DOWN)
 
-_Generated: 2026-07-06 07:02 UTC_
+_Generated: 2026-07-06 07:03 UTC_
 
 **Train**: 2025-06-01 – 2025-08-31 (244,076 bars)  **Test**: 2025-09-01 – 2025-09-30 (127,245 bars)
 

@@ -1,6 +1,6 @@
 # Kalshi Weather Market: 3-Class Classification (UP / NEUTRAL / DOWN)
 
-_Generated: 2026-07-06 04:25 UTC_
+_Generated: 2026-07-06 06:03 UTC_
 
 **Train**: 2025-06-01 – 2025-08-31 (244,076 bars)  **Test**: 2025-09-01 – 2025-09-30 (127,245 bars)
 
@@ -85,8 +85,8 @@ Gain importance (total log-loss reduction from splits).
 
 | Rank | Feature | Gain | Share | Category | Bar |
 |---|---|---|---|---|---|
-| 1 | `tod_sin` | 5,575 | 6.0% | time | `█████████████████████████` |
-| 2 | `tod_cos` | 5,290 | 5.7% | time | `████████████████████████░` |
+| 1 | `tod_sin` | 5,576 | 6.0% | time | `█████████████████████████` |
+| 2 | `tod_cos` | 5,289 | 5.7% | time | `████████████████████████░` |
 | 3 | `price_previous` | 5,284 | 5.7% | anchor | `████████████████████████░` |
 | 4 | `vol_sum_15` | 4,955 | 5.3% | flow | `██████████████████████░░░` |
 | 5 | `oi_change_15` | 4,743 | 5.1% | flow | `█████████████████████░░░░` |
@@ -95,7 +95,7 @@ Gain importance (total log-loss reduction from splits).
 | 8 | `mid_close` | 3,947 | 4.2% | anchor | `██████████████████░░░░░░░` |
 | 9 | `ask_lag15` | 3,653 | 3.9% | momentum | `████████████████░░░░░░░░░` |
 | 10 | `rel_mid` | 3,158 | 3.4% | cross | `██████████████░░░░░░░░░░░` |
-| 11 | `mins_to_peak` | 2,925 | 3.1% | resolution | `█████████████░░░░░░░░░░░░` |
+| 11 | `mins_to_peak` | 2,926 | 3.1% | resolution | `█████████████░░░░░░░░░░░░` |
 | 12 | `yes_ask_close` | 2,856 | 3.1% | anchor | `█████████████░░░░░░░░░░░░` |
 | 13 | `spread_dispersion` | 2,688 | 2.9% | cross | `████████████░░░░░░░░░░░░░` |
 | 14 | `avg_spread_all` | 2,453 | 2.6% | cross | `███████████░░░░░░░░░░░░░░` |
@@ -104,7 +104,7 @@ Gain importance (total log-loss reduction from splits).
 | 17 | `spread` | 2,256 | 2.4% | spread | `██████████░░░░░░░░░░░░░░░` |
 | 18 | `price_polarization` | 2,030 | 2.2% | resolution | `█████████░░░░░░░░░░░░░░░░` |
 | 19 | `ask_lag5` | 2,028 | 2.2% | momentum | `█████████░░░░░░░░░░░░░░░░` |
-| 20 | `frac_day_elapsed` | 1,979 | 2.1% | resolution | `█████████░░░░░░░░░░░░░░░░` |
+| 20 | `frac_day_elapsed` | 1,978 | 2.1% | resolution | `█████████░░░░░░░░░░░░░░░░` |
 
 ### Category Summary (GBM)
 

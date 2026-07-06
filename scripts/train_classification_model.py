@@ -5,9 +5,9 @@ Three-class classification: UP / NEUTRAL / DOWN
 
 Label construction
 ------------------
-  UP      move > 0   (~32% of bars)
-  NEUTRAL move == 0  (~35% of bars — genuine market microstructure flat)
-  DOWN    move < 0   (~33% of bars)
+  UP      move > +0.05  (ask rose more than 5¢ over 30 min)
+  NEUTRAL |move| <= 0.05  (within ±5¢ — economically insignificant)
+  DOWN    move < -0.05  (ask fell more than 5¢ over 30 min)
 
   All bars kept. In live trading we cannot know the future outcome, so the
   model must handle all three cases on every bar.
@@ -146,10 +146,12 @@ FEATURE_CATEGORIES = {
 
 # ── label construction ────────────────────────────────────────────────────────
 
+NEUTRAL_THRESHOLD = 0.05  # ±5¢ — moves within this band are labelled NEUTRAL
+
 def make_labels(move: pd.Series) -> np.ndarray:
     labels = np.full(len(move), NEUTRAL, dtype=int)
-    labels[move > 0] = UP
-    labels[move < 0] = DOWN
+    labels[move >  NEUTRAL_THRESHOLD] = UP
+    labels[move < -NEUTRAL_THRESHOLD] = DOWN
     return labels
 
 
@@ -300,9 +302,9 @@ def write_report(
 
     h("Methodology")
     priors = metrics[0]["priors"]
-    p(f"- **Classes**: DOWN (`move < 0`, {priors[DOWN]:.1%}), "
-      f"NEUTRAL (`move = 0`, {priors[NEUTRAL]:.1%}), "
-      f"UP (`move > 0`, {priors[UP]:.1%})")
+    p(f"- **Classes**: DOWN (`move < -0.05`, {priors[DOWN]:.1%}), "
+      f"NEUTRAL (`|move| ≤ 0.05`, {priors[NEUTRAL]:.1%}), "
+      f"UP (`move > +0.05`, {priors[UP]:.1%})")
     p("- **All bars included** — model predicts on every bar as in live trading")
     p("- **Loss**: negative log loss (categorical cross-entropy), lower = better")
     p(f"- **Naive baseline**: predict class priors on every bar → "

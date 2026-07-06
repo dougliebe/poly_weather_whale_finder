@@ -4,7 +4,7 @@ build_candle_features.py
 Extracts feature-engineered rows from the Ducklake candles table and writes
 them to data/features_candles.parquet for model training.
 
-Target: target_move_30 = yes_ask_open(T+30) − yes_ask_close(T)
+Target: target_move_90 = yes_ask_open(T+90) − yes_ask_close(T)
         (signed 30-minute price move in decimal probability units)
 
 Feature categories
@@ -194,18 +194,18 @@ with_cross AS (
 with_target AS (
     SELECT
         f.*,
-        t30.yes_ask_open                              AS target_ask_open_30,
-        (t30.yes_ask_open + t30.yes_bid_open) / 2.0  AS target_mid_30,
-        t30.yes_ask_open - f.yes_ask_close            AS target_move_30
+        t30.yes_ask_open                              AS target_ask_open_90,
+        (t30.yes_ask_open + t30.yes_bid_open) / 2.0  AS target_mid_90,
+        t30.yes_ask_open - f.yes_ask_close            AS target_move_90
     FROM with_cross f
     LEFT JOIN base t30
       ON  f.ticker     = t30.ticker
       AND f.trade_date = t30.trade_date
-      AND t30.end_period_ts = f.end_period_ts + 1800
+      AND t30.end_period_ts = f.end_period_ts + 5400
 )
 
 SELECT * FROM with_target
-WHERE target_move_30 IS NOT NULL
+WHERE target_move_90 IS NOT NULL
 ORDER BY ticker, trade_date, end_period_ts
 """.format(pi=math.pi)
 
@@ -226,7 +226,7 @@ def build_features(catalog: Path, data_dir: Path, out_path: Path) -> None:
     # Sanity checks
     assert df["yes_ask_close"].between(0, 1).mean() > 0.95, \
         "Prices appear to be in cents, not decimals — check data"
-    assert df["target_ask_open_30"].between(0, 1).mean() > 0.95, \
+    assert df["target_ask_open_90"].between(0, 1).mean() > 0.95, \
         "Target prices appear to be in cents, not decimals — check data"
 
     pct_null = df.isnull().mean()

@@ -66,7 +66,7 @@ log = logging.getLogger(__name__)
 
 TRAIN_END  = "2025-08-31"
 TEST_START = "2025-09-01"
-TARGET_COL = "target_move_30"
+TARGET_COL = "target_move_90"
 
 # Class labels
 DOWN, NEUTRAL, UP = 0, 1, 2

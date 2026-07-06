@@ -47,7 +47,7 @@ log = logging.getLogger(__name__)
 
 TRAIN_END  = "2025-08-31"
 TEST_START = "2025-09-01"
-TARGET_COL = "target_move_30"
+TARGET_COL = "target_move_90"
 CURRENT_PRICE_COL = "yes_ask_close"  # price at T, kept for per-ticker stats
 
 _MOMENTUM = [
@@ -244,7 +244,7 @@ def write_report(
                  f"({len(df_test):,} rows)")
 
     h("Methodology")
-    p("- **Target**: `target_move_30` = `yes_ask_open` at T+30 minus `yes_ask_close` at T — the 30-min price move")
+    p("- **Target**: `target_move_90` = `yes_ask_open` at T+90 minus `yes_ask_close` at T — the 90-min price move")
     p("- **Train/Test split**: purely temporal (no shuffling) — 2025-06-01–2025-08-31 train, "
       "2025-09-01–2025-09-30 test")
     p("- **NaN handling**: median imputation fit on training set only, applied to test")

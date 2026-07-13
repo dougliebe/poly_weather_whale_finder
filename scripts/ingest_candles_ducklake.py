@@ -293,16 +293,13 @@ def already_loaded(con: duckdb.DuckDBPyConnection, ticker: str, trade_date: date
 
 
 def upsert_rows(con: duckdb.DuckDBPyConnection, rows: list[dict]) -> int:
-    """Insert rows into candles table. Caller must ensure no duplicates via already_loaded()."""
+    """Insert rows into candles table via bulk DataFrame insert (much faster than executemany)."""
     if not rows:
         return 0
-    cols = list(rows[0].keys())
-    placeholders = ", ".join("?" * len(cols))
-    col_list = ", ".join(cols)
-    sql = f"INSERT INTO candles ({col_list}) VALUES ({placeholders})"
-    tuples = [tuple(r[c] for c in cols) for r in rows]
-    con.executemany(sql, tuples)
-    return len(tuples)
+    import pandas as pd
+    df = pd.DataFrame(rows)
+    con.execute("INSERT INTO candles SELECT * FROM df")
+    return len(df)
 
 
 # ── orchestration ─────────────────────────────────────────────────────────────

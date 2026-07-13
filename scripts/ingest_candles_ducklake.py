@@ -57,7 +57,9 @@ KALSHI_BASE     = "https://external-api.kalshi.com/trade-api/v2"
 MARKETS_EP      = f"{KALSHI_BASE}/markets"
 EVENTS_EP       = f"{KALSHI_BASE}/events"
 HIST_TRADES_EP  = f"{KALSHI_BASE}/historical/trades"
-CANDLES_EP_TMPL = f"{KALSHI_BASE}/historical/markets/{{ticker}}/candlesticks"
+# /historical/... only works for archived data (pre-2026); for recent data use /series/... path
+CANDLES_EP_TMPL      = f"{KALSHI_BASE}/historical/markets/{{ticker}}/candlesticks"
+CANDLES_SERIES_TMPL  = f"{KALSHI_BASE}/series/{{series}}/markets/{{ticker}}/candlesticks"
 
 _KXHIGHLAX_BIN_SUFFIXES = [
     # below-tail (T{x} = "x-1° or below")
@@ -161,17 +163,26 @@ def discover_tickers(event_ticker, start_ts, end_ts, probe=False, explicit=None,
 
 
 def fetch_candles(ticker, start_ts, end_ts, interval=1, rate_sleep=0.15) -> list[dict]:
-    url  = CANDLES_EP_TMPL.format(ticker=ticker)
-    try:
-        body = get_with_retry(url, {"start_ts": start_ts, "end_ts": end_ts, "period_interval": interval}, rate_sleep=rate_sleep)
-    except requests.HTTPError as exc:
-        if exc.response is not None and exc.response.status_code == 404:
-            log.debug("  %s: candlestick 404 (no data), skipping", ticker)
-            return []
-        raise
-    if body.get("error"):
-        log.warning("  %s: API error — %s (market not yet in historical archive?)",
-                    ticker, body["error"].get("code", "unknown"))
+    series = ticker.split("-")[0]
+    params = {"start_ts": start_ts, "end_ts": end_ts, "period_interval": interval}
+    # Try historical archive first; fall back to series endpoint for recent data
+    for url in [
+        CANDLES_EP_TMPL.format(ticker=ticker),
+        CANDLES_SERIES_TMPL.format(series=series, ticker=ticker),
+    ]:
+        try:
+            body = get_with_retry(url, params, rate_sleep=rate_sleep)
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                continue  # try next URL
+            raise
+        if body.get("error"):
+            log.warning("  %s: API error — %s", ticker, body["error"].get("code", "unknown"))
+            continue
+        if body.get("candlesticks") is not None:
+            break  # got a valid response
+    else:
+        log.debug("  %s: no candlestick data from any endpoint, skipping", ticker)
         return []
     rows = []
     for c in (body.get("candlesticks") or []):

@@ -190,6 +190,13 @@ def fetch_candles(ticker, start_ts, end_ts, interval=1, rate_sleep=0.15) -> list
         p   = c.get("price") or {}
         bid = c.get("yes_bid") or {}
         ask = c.get("yes_ask") or {}
+
+        # Historical endpoint uses plain keys ("open", "close", …);
+        # series endpoint uses "_dollars" suffix ("open_dollars", "close_dollars", …).
+        def _f(d, key):
+            v = d.get(key) or d.get(f"{key}_dollars")
+            return float(v) if v is not None else None
+
         rows.append({
             "ticker":          ticker,
             "series_ticker":   ticker.split("-")[0],
@@ -197,22 +204,23 @@ def fetch_candles(ticker, start_ts, end_ts, interval=1, rate_sleep=0.15) -> list
             "end_period_ts":   ts,
             "end_period_utc":  datetime.fromtimestamp(ts, tz=timezone.utc) if ts else None,
             "interval_min":    interval,
-            "price_open":      float(p["open"])     if p.get("open")     else None,
-            "price_high":      float(p["high"])     if p.get("high")     else None,
-            "price_low":       float(p["low"])      if p.get("low")      else None,
-            "price_close":     float(p["close"])    if p.get("close")    else None,
-            "price_mean":      float(p["mean"])     if p.get("mean")     else None,
-            "price_previous":  float(p["previous"]) if p.get("previous") else None,
-            "yes_bid_open":    float(bid["open"])   if bid.get("open")   else None,
-            "yes_bid_high":    float(bid["high"])   if bid.get("high")   else None,
-            "yes_bid_low":     float(bid["low"])    if bid.get("low")    else None,
-            "yes_bid_close":   float(bid["close"])  if bid.get("close")  else None,
-            "yes_ask_open":    float(ask["open"])   if ask.get("open")   else None,
-            "yes_ask_high":    float(ask["high"])   if ask.get("high")   else None,
-            "yes_ask_low":     float(ask["low"])    if ask.get("low")    else None,
-            "yes_ask_close":   float(ask["close"])  if ask.get("close")  else None,
-            "volume":          float(c["volume"])        if c.get("volume")        else 0.0,
-            "open_interest":   float(c["open_interest"]) if c.get("open_interest") else None,
+            "price_open":      _f(p, "open"),
+            "price_high":      _f(p, "high"),
+            "price_low":       _f(p, "low"),
+            "price_close":     _f(p, "close"),
+            "price_mean":      _f(p, "mean"),
+            "price_previous":  _f(p, "previous"),
+            "yes_bid_open":    _f(bid, "open"),
+            "yes_bid_high":    _f(bid, "high"),
+            "yes_bid_low":     _f(bid, "low"),
+            "yes_bid_close":   _f(bid, "close"),
+            "yes_ask_open":    _f(ask, "open"),
+            "yes_ask_high":    _f(ask, "high"),
+            "yes_ask_low":     _f(ask, "low"),
+            "yes_ask_close":   _f(ask, "close"),
+            "volume":          float(c.get("volume") or c.get("volume_fp") or 0),
+            "open_interest":   float(c["open_interest"]) if c.get("open_interest") else (
+                               float(c["open_interest_fp"]) if c.get("open_interest_fp") else None),
         })
     return rows
 

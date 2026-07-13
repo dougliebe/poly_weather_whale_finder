@@ -70,16 +70,12 @@ _KXHIGHLAX_BIN_SUFFIXES = [
     "T73", "T74", "T75", "T76", "T77", "T78", "T79", "T80", "T82", "T84", "T86",
 ]
 
-# Miami runs hotter — typical range 75–95°F in summer
+# Miami uses coarser 2°F bins; range shifts seasonally ~86–96°F in summer
+# Discovery via /markets API works directly — this list is a probe fallback only
 _KXHIGHMIA_BIN_SUFFIXES = [
-    # below-tail
-    "T75", "T76", "T77", "T78", "T79", "T80", "T81", "T82", "T83", "T84", "T85",
-    # between-bins
-    "B75.5", "B76.5", "B77.5", "B78.5", "B79.5", "B80.5",
-    "B81.5", "B82.5", "B83.5", "B84.5", "B85.5", "B86.5", "B87.5", "B88.5", "B89.5", "B90.5",
-    "B91.5", "B92.5", "B93.5", "B94.5", "B95.5",
-    # above-tail
-    "T86", "T87", "T88", "T89", "T90", "T91", "T92", "T93", "T94", "T95",
+    "T84", "T85", "T86", "T87", "T88", "T89", "T90", "T91", "T92", "T93", "T94", "T95", "T96", "T97",
+    "B84.5", "B85.5", "B86.5", "B87.5", "B88.5", "B89.5", "B90.5",
+    "B91.5", "B92.5", "B93.5", "B94.5", "B95.5", "B96.5",
 ]
 
 _SERIES_BIN_SUFFIXES = {

@@ -165,11 +165,15 @@ def discover_tickers(event_ticker, start_ts, end_ts, probe=False, explicit=None,
 def fetch_candles(ticker, start_ts, end_ts, interval=1, rate_sleep=0.15) -> list[dict]:
     series = ticker.split("-")[0]
     params = {"start_ts": start_ts, "end_ts": end_ts, "period_interval": interval}
-    # Try historical archive first; fall back to series endpoint for recent data
-    for url in [
-        CANDLES_EP_TMPL.format(ticker=ticker),
-        CANDLES_SERIES_TMPL.format(series=series, ticker=ticker),
-    ]:
+    # Historical archive only covers data before 2026; use series endpoint directly for recent dates
+    import datetime as _dt
+    cutoff_ts = int(_dt.datetime(2026, 1, 1, tzinfo=_dt.timezone.utc).timestamp())
+    if start_ts >= cutoff_ts:
+        urls = [CANDLES_SERIES_TMPL.format(series=series, ticker=ticker)]
+    else:
+        urls = [CANDLES_EP_TMPL.format(ticker=ticker),
+                CANDLES_SERIES_TMPL.format(series=series, ticker=ticker)]
+    for url in urls:
         try:
             body = get_with_retry(url, params, rate_sleep=rate_sleep)
         except requests.HTTPError as exc:

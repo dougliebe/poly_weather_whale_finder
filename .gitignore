@@ -4,6 +4,7 @@ data/processed/
 __pycache__/
 *.pyc
 data/*.ducklake
+data/*.ducklake.wal
 data/kalshi_data/
 data/features_candles.parquet
 models/

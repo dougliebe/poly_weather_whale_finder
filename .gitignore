@@ -7,4 +7,6 @@ data/*.ducklake
 data/*.ducklake.wal
 data/kalshi_data/
 data/features_candles.parquet
+data/candles_csv/
+data/candles_all.parquet
 models/

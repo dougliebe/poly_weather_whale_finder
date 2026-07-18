@@ -25,6 +25,7 @@ from src.data_api import (
     build_market_meta,
     day_timestamps,
     fetch_all_trades,
+    fetch_all_trades_with_roles,
     enrich_trades,
 )
 from src.artifact import generate_artifact
@@ -38,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("slug", help="Event slug, e.g. highest-temperature-in-dallas-on-july-19-2026")
     p.add_argument("--save",           action="store_true", help="Save raw + enriched JSON to data/raw/")
     p.add_argument("--artifact",       action="store_true", help="Generate HTML artifact to data/artifacts/")
-    p.add_argument("--no-taker-filter",action="store_true", help="Fetch all sides, not just taker trades")
+    p.add_argument("--no-taker-filter",action="store_true", help="Deprecated: roles are now fetched automatically (both sides with maker/taker labeling)")
     p.add_argument("--no-date-filter", action="store_true", help="Fetch all trades regardless of date (useful for upcoming markets)")
     p.add_argument("--page-size",      type=int, default=500, help="Trades per API page (default 500)")
     return p.parse_args()
@@ -93,35 +94,24 @@ def main() -> None:
     tz = timezone(timedelta(hours=-5))
     print(f"  Window   : {datetime.fromtimestamp(start_ts, tz)} → {datetime.fromtimestamp(end_ts, tz)} (CDT)")
 
-    # ── 4. Fetch trades ────────────────────────────────────────────────────────
+    # ── 4. Fetch trades (both sides, with maker/taker role labeling) ───────────
+    def _fetch(start, end):
+        return fetch_all_trades_with_roles(
+            event_id=int(event_id),
+            start_ts=start,
+            end_ts=end,
+            page_size=args.page_size,
+        )
+
     if args.no_date_filter:
         print(f"\nFetching trades (event {event_id}, all dates) …", flush=True)
-        raw = fetch_all_trades(
-            event_id=int(event_id),
-            start_ts=None,
-            end_ts=None,
-            page_size=args.page_size,
-            taker_only=not args.no_taker_filter,
-        )
+        raw = _fetch(None, None)
     else:
         print(f"\nFetching trades (event {event_id}, window {start_ts}–{end_ts}) …", flush=True)
-        raw = fetch_all_trades(
-            event_id=int(event_id),
-            start_ts=start_ts,
-            end_ts=end_ts,
-            page_size=args.page_size,
-            taker_only=not args.no_taker_filter,
-        )
-        # If the event date is in the future or hasn't traded yet, fall back to all trades
+        raw = _fetch(start_ts, end_ts)
         if not raw:
             print("  No trades in date window — retrying without date filter …", flush=True)
-            raw = fetch_all_trades(
-                event_id=int(event_id),
-                start_ts=None,
-                end_ts=None,
-                page_size=args.page_size,
-                taker_only=not args.no_taker_filter,
-            )
+            raw = _fetch(None, None)
     print(f"  Raw trades fetched: {len(raw):,}")
 
     if not raw:

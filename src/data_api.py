@@ -104,6 +104,24 @@ def day_timestamps(slug: str, tz_offset: timedelta = CITY_TZ_OFFSET) -> tuple[in
 
 # ── Trade data ─────────────────────────────────────────────────────────────────
 
+def _paginate(params_base: dict, page_size: int, sleep_between: float) -> list[dict]:
+    trades = []
+    offset = 0
+    while True:
+        params = {**params_base, "offset": offset}
+        resp = requests.get(f"{DATA_BASE}/trades", params=params, timeout=30)
+        resp.raise_for_status()
+        page = resp.json()
+        if not page:
+            break
+        trades.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+        time.sleep(sleep_between)
+    return trades
+
+
 def fetch_all_trades(
     event_id: int,
     start_ts: Optional[int],
@@ -122,8 +140,6 @@ def fetch_all_trades(
         timestamp, title, slug, outcome, outcomeIndex,
         name, pseudonym, transactionHash
     """
-    trades = []
-    offset = 0
     params_base: dict = {"eventId": event_id, "limit": page_size}
     if start_ts is not None:
         params_base["start"] = start_ts
@@ -131,28 +147,51 @@ def fetch_all_trades(
         params_base["end"] = end_ts
     if taker_only:
         params_base["takerOnly"] = "true"
+    return _paginate(params_base, page_size, sleep_between)
 
-    while True:
-        params = {**params_base, "offset": offset}
-        resp = requests.get(f"{DATA_BASE}/trades", params=params, timeout=30)
-        resp.raise_for_status()
-        page = resp.json()
-        if not page:
-            break
-        trades.extend(page)
-        if len(page) < page_size:
-            break
-        offset += page_size
-        time.sleep(sleep_between)
 
-    return trades
+def fetch_all_trades_with_roles(
+    event_id: int,
+    start_ts: Optional[int],
+    end_ts: Optional[int],
+    page_size: int = 500,
+    sleep_between: float = 0.15,
+) -> list[dict]:
+    """
+    Fetch all trades with maker/taker role labeling.
+
+    Makes two paginated API calls:
+      1. takerOnly=false  → both sides of every trade (2 records per tx)
+      2. takerOnly=true   → taker-only records (1 per tx) to identify which side is taker
+
+    Returns all records (both maker and taker) with a "role" field added:
+        "TAKER" for the aggressor, "MAKER" for the resting limit order.
+    """
+    params_base: dict = {"eventId": event_id, "limit": page_size}
+    if start_ts is not None:
+        params_base["start"] = start_ts
+    if end_ts is not None:
+        params_base["end"] = end_ts
+
+    all_trades   = _paginate({**params_base, "takerOnly": "false"}, page_size, sleep_between)
+    taker_trades = _paginate({**params_base, "takerOnly": "true"}, page_size, sleep_between)
+
+    # Build set of (transactionHash, proxyWallet) for takers
+    taker_keys = {(t["transactionHash"], t["proxyWallet"]) for t in taker_trades}
+
+    for t in all_trades:
+        key = (t.get("transactionHash", ""), t.get("proxyWallet", ""))
+        t["role"] = "TAKER" if key in taker_keys else "MAKER"
+
+    return all_trades
 
 
 def enrich_trades(raw_trades: list[dict], market_meta: dict) -> list[dict]:
     """
-    Add "ticker" and "is_yes" fields to each trade using the market metadata map.
+    Add "ticker", "is_yes", and "usdc_value" fields to each trade.
 
     Trades whose asset is not in market_meta get ticker="unknown", is_yes=None.
+    Preserves any "role" field already set (e.g. by fetch_all_trades_with_roles).
     """
     enriched = []
     for t in raw_trades:

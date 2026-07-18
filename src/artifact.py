@@ -28,7 +28,8 @@ def _slim_trades(enriched_trades: list[dict]) -> list:
     Convert enriched trade dicts to a compact array-of-arrays for JS embedding.
 
     Columns: [timestamp, proxyWallet, walletShort, isBuy, price, usdcValue,
-              ticker, isYes, txShort, name]
+              ticker, isYes, txShort, name, role]
+    role: "TAKER" | "MAKER" | ""
     """
     slim = []
     for t in enriched_trades:
@@ -45,6 +46,7 @@ def _slim_trades(enriched_trades: list[dict]) -> list:
             1 if t.get("is_yes") else 0,
             (tx[:12] + "…") if len(tx) > 12 else tx,
             t.get("name") or t.get("pseudonym") or "",
+            t.get("role", ""),
         ])
     return slim
 
@@ -198,6 +200,10 @@ canvas{{display:block;width:100%}}
   <button class="chip chip-yes active" id="by" onclick="toggleOut('YES')">YES</button>
   <button class="chip chip-no active" id="bn" onclick="toggleOut('NO')">NO</button>
   <div class="sep"></div>
+  <span class="fl">Role</span>
+  <button class="chip active" id="btk" onclick="toggleRole('TAKER')" style="color:#0369a1;border-color:#0369a1">TAKER</button>
+  <button class="chip active" id="bmk" onclick="toggleRole('MAKER')" style="color:#7c3aed;border-color:#7c3aed">MAKER</button>
+  <div class="sep"></div>
   <input class="wi" id="ws" placeholder="wallet or name…" oninput="onWS()">
   <button class="bc" onclick="clearAll()">Reset</button>
 </div>
@@ -245,6 +251,7 @@ canvas{{display:block;width:100%}}
         <th onclick="sortT('ticker')">Ticker↕</th>
         <th onclick="sortT('out')">Token↕</th>
         <th onclick="sortT('side')">Side↕</th>
+        <th onclick="sortT('role')">Role↕</th>
         <th onclick="sortT('price')">Price↕</th>
         <th onclick="sortT('usdc')">USDC↕</th>
         <th>Wallet / Name</th>
@@ -263,7 +270,7 @@ canvas{{display:block;width:100%}}
 </div>
 
 <script>
-// cols: [timestamp,wallet,walletShort,isBuy,price,usdc,ticker,isYes,tx,name]
+// cols: [timestamp,wallet,walletShort,isBuy,price,usdc,ticker,isYes,tx,name,role]
 const RAW={data_json};
 const TICKERS={tickers_json};
 const CL={colors_l_json};
@@ -272,7 +279,7 @@ const MIN_TS=RAW.length?Math.min(...RAW.map(r=>r[0])):0;
 const MAX_TS=RAW.length?Math.max(...RAW.map(r=>r[0])):1;
 const PAGE=50;
 
-let aTick=new Set(TICKERS),showB=true,showS=true,showY=true,showN=true;
+let aTick=new Set(TICKERS),showB=true,showS=true,showY=true,showN=true,showTK=true,showMK=true;
 let wf='',selW=null,tSort={{c:'usdc',d:-1}},wSort={{c:'usdc',d:-1}},page=0;
 let filtered=[],wData=[];
 
@@ -298,11 +305,12 @@ function toggleTick(t,b){{
 }}
 function toggleSide(s){{if(s==='BUY'){{showB=!showB;document.getElementById('bb').classList.toggle('active',showB);}}else{{showS=!showS;document.getElementById('bs').classList.toggle('active',showS);}}update();}}
 function toggleOut(o){{if(o==='YES'){{showY=!showY;document.getElementById('by').classList.toggle('active',showY);}}else{{showN=!showN;document.getElementById('bn').classList.toggle('active',showN);}}update();}}
+function toggleRole(r){{if(r==='TAKER'){{showTK=!showTK;document.getElementById('btk').classList.toggle('active',showTK);}}else{{showMK=!showMK;document.getElementById('bmk').classList.toggle('active',showMK);}}update();}}
 function onWS(){{wf=document.getElementById('ws').value.toLowerCase();if(wf)selW=null;update();}}
 function clearAll(){{
-  aTick=new Set(TICKERS);showB=true;showS=true;showY=true;showN=true;wf='';selW=null;
+  aTick=new Set(TICKERS);showB=true;showS=true;showY=true;showN=true;showTK=true;showMK=true;wf='';selW=null;
   document.getElementById('ws').value='';
-  ['bb','bs','by','bn'].forEach(id=>document.getElementById(id).classList.add('active'));
+  ['bb','bs','by','bn','btk','bmk'].forEach(id=>document.getElementById(id).classList.add('active'));
   buildChips();update();
 }}
 
@@ -311,6 +319,7 @@ function computeF(){{
     if(!aTick.has(r[6]))return false;
     if(r[3]&&!showB)return false;if(!r[3]&&!showS)return false;
     if(r[7]&&!showY)return false;if(!r[7]&&!showN)return false;
+    if(r[10]==='TAKER'&&!showTK)return false;if(r[10]==='MAKER'&&!showMK)return false;
     if(wf&&!r[1].toLowerCase().includes(wf)&&!r[9].toLowerCase().includes(wf))return false;
     if(selW&&r[1]!==selW)return false;
     return true;
@@ -452,7 +461,7 @@ function renderW(){{
   }});
 }}
 
-const CI={{ts:0,ticker:6,out:7,side:3,price:4,usdc:5}};
+const CI={{ts:0,ticker:6,out:7,side:3,price:4,usdc:5,role:10}};
 function sortT(c){{if(tSort.c===c)tSort.d*=-1;else{{tSort.c=c;tSort.d=-1;}}page=0;renderT();}}
 function renderT(){{
   const ci=CI[tSort.c]??5;
@@ -464,7 +473,8 @@ function renderT(){{
     const col=tc(r[6]);
     const tok=r[7]?'<span style="color:#6d28d9;font-size:9px">YES</span>':'<span style="color:#b45309;font-size:9px">NO</span>';
     const label=r[9]?r[9]:`${{r[2]}}…`;
-    tr.innerHTML=`<td style="color:var(--tm)">${{fmtT(r[0])}}</td><td><span style="color:${{col}};font-weight:600">${{r[6]}}</span></td><td>${{tok}}</td><td style="color:${{r[3]?'var(--buy)':'var(--sell)'}};">${{r[3]?'BUY':'SELL'}}</td><td>${{r[4].toFixed(4)}}</td><td style="font-weight:${{r[5]>50?700:400}}">$${{r[5].toFixed(2)}}</td><td style="color:var(--ts);font-size:10px">${{label}}</td>`;
+    const roleHtml=r[10]==='TAKER'?'<span style="color:#0369a1;font-size:9px;font-family:var(--mono)">TAKER</span>':r[10]==='MAKER'?'<span style="color:#7c3aed;font-size:9px;font-family:var(--mono)">MAKER</span>':'';
+    tr.innerHTML=`<td style="color:var(--tm)">${{fmtT(r[0])}}</td><td><span style="color:${{col}};font-weight:600">${{r[6]}}</span></td><td>${{tok}}</td><td style="color:${{r[3]?'var(--buy)':'var(--sell)'}};">${{r[3]?'BUY':'SELL'}}</td><td>${{roleHtml}}</td><td>${{r[4].toFixed(4)}}</td><td style="font-weight:${{r[5]>50?700:400}}">$${{r[5].toFixed(2)}}</td><td style="color:var(--ts);font-size:10px">${{label}}</td>`;
     tb.appendChild(tr);
   }});
   const pages=Math.ceil(tot/PAGE)||1;
@@ -493,7 +503,8 @@ document.getElementById('sc').addEventListener('mousemove',e=>{{
   }});
   if(best){{
     const col=tc(best[6]);
-    tip.innerHTML=`<div style="color:${{col}};font-weight:700;font-family:var(--mono)">${{best[6]}} ${{best[7]?'YES':'NO'}}</div><div>${{best[3]?'<b style="color:var(--buy)">BUY</b>':'<b style="color:var(--sell)">SELL</b>'}} $${{best[5].toFixed(3)}} · p=${{best[4].toFixed(4)}}</div><div style="color:var(--tm);font-size:10px">${{fmtT(best[0])}} · ${{best[8]}}</div><div style="color:var(--tm);font-size:10px">${{best[9]||best[2]}}…</div>`;
+    const roleLabel=best[10]?`<span style="color:${{best[10]==='TAKER'?'#0369a1':'#7c3aed'}}">${{best[10]}}</span> · `:'';
+    tip.innerHTML=`<div style="color:${{col}};font-weight:700;font-family:var(--mono)">${{best[6]}} ${{best[7]?'YES':'NO'}}</div><div>${{best[3]?'<b style="color:var(--buy)">BUY</b>':'<b style="color:var(--sell)">SELL</b>'}} ${{roleLabel}}$${{best[5].toFixed(3)}} · p=${{best[4].toFixed(4)}}</div><div style="color:var(--tm);font-size:10px">${{fmtT(best[0])}} · ${{best[8]}}</div><div style="color:var(--tm);font-size:10px">${{best[9]||best[2]}}…</div>`;
     tip.style.display='block';tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY-8)+'px';
   }}else tip.style.display='none';
 }});
